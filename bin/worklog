@@ -1,0 +1,1507 @@
+#!/bin/sh -
+#
+#
+# worklog (c) 1998 by Eric Obermuhlner
+#
+# Call this script with option -h or -help for help info.
+#
+##############################################################################
+#
+# File: worklog
+# Revision: 1.59
+# Date(last delta): 00/09/13 09:10:01
+# Date(current): 00/09/13 09:10:02
+# ID: @(#)worklog 1.59
+#
+##############################################################################
+#
+# Version history:
+# ================
+#
+#
+# V1.3
+#  - better -check
+#  - added -graphic
+#  - fixed some minor bugs
+#
+# ----------------
+#
+# V1.2
+# - Features
+#   - Renamed -analyze to -statistics
+#   - document hidden features of last release
+#   - -resume to add the last matching entry
+#   - -report to generate daily/monthly/yearly reports
+#      (add .worklog_report to get necessary data)
+#   - .worklogrc to customize default behaviour
+#
+# ----------------
+#
+# V1.1
+# - Features:
+#   - Improved -analyze
+#   - -check does plausibility check on entries
+#
+# - Undocumented features (for next release):
+#   - -all to select the complete date-range
+#
+# - Bug fixes:
+#   - Duration calc works now for all dates 1970-3000
+#     including leap years (no leap seconds though)
+#
+# ----------------
+#
+# V1.0
+# - Features:
+#   - add timestamped entry to worklogfile
+#   - -timeslices
+#   - -analyze
+#   - -year -month -day for date-range selection
+#   - -file to define alternate worklogfile
+#
+#
+##############################################################################
+ 
+
+progname="worklog"
+debugging=0
+version_text="V1.4a  (build 1.59 00/09/13)"
+
+## portability:
+case `uname` in
+Windows_* )
+    os=windows
+    awk='awk'
+    NULL='NUL'
+    ;;
+CYGWIN_* )
+    os=unix
+    awk='awk'
+    NULL='/dev/null'
+    ;;
+MING* )
+    os=unix
+    awk=awk
+    NULL='/dev/null'
+    ;;
+* )
+    os=unix
+    awk='nawk'
+    NULL='/dev/null'
+    ;;
+esac
+
+print_usage()
+{
+# $1	error value (optional, default is 255)
+
+cat <<_END_USAGE_
+NAME
+    $progname : keep a worklog and analyze it.
+
+
+SYNOPSIS
+    $progname -help
+         Prints this help text.
+
+    $progname [options] category [project [task [...]]]
+         Adds a new entry using the current date-time to the worklogfile. 
+
+    $progname [options] off [project [task [...]]]
+         Adds a special 'off' entry to the worklogfile. 
+
+    $progname [options] 
+	 Prints worklogfile entries of the selected date-range.
+
+    $progname [options] -statistics
+         Prints a statistical analysis of the 
+         categories/projects/tasks of the selected date-range.
+
+    $progname [options] -check
+         Checks the selected date-range for wrong or improbable entries.
+
+    $progname [options] -categories
+         Prints sorted categories of the selected date-range.
+
+    $progname [options] -projects
+         Prints sorted projects of the selected date-range.
+
+    $progname [options] -tasks
+         Prints sorted projects of the selected date-range.
+
+
+DESCRIPTION
+    $progname creates timestamped entries in a worklogfile and
+    gives the possibility to analyze the worklogfile.
+    The goal is to provide a timereporting tool that is very simple to use
+    but still powerful enough to satisfy most needs.
+
+       
+OPTIONS
+    -help       Prints this help information.
+    -?
+    -h
+ 
+    -version    Print version of $progname.
+
+    -f file     Set the worklog file to a specific file.
+                Default is \'$default_worklogfile\'.
+
+    -check      Check for improbable entries in the selected date-range.
+    -c          Currently this option prints messages for syntax errors, 
+                missing categories and projects and unreasonably long
+                timeslices (over $unreasonably_long_timesclice hours).
+
+    -year num   Set the year of the selected date-range for further processing.
+    -y num      The format is "yyyy".
+                Example: -y 1997
+
+    -month num  Set the month of the selected date-range for further processing.
+    -m num      The format is "mm".
+                Example: -m 02
+
+    -day num    Set the day of the selected date-range for further processing.
+    -d num      The format is "dd".
+                Example: -d 24
+                The componenents for the date need to be give in the
+                order 'year', 'month', 'day'.
+                Default is the current date.
+
+    -all        Set the selected date-range to all valid entries in the
+    -a          worklogfile.
+
+    -statistics Print the complete analysis over categories/projects/tasks
+    -s          over the selected date-range.
+         
+    -categories Print the categories (field 1) of the selected date-range.
+		The output is sorted alphabetically.
+                This is useful to check for consistent naming.
+
+    -projects   Print the projects (field 2) of the selected date-range.
+		The output is sorted alphabetically.
+                This is useful to check for consistent naming.
+
+    -tasks      Print the tasks (field 3) of the selected date-range.
+		The output is sorted alphabetically.
+                This is useful to check for consistent naming.
+
+    -entries    Print the entries (field 1,2,3) of the selected date-range.
+		The output is sorted alphabetically.
+                This is useful to check for consistent naming.
+
+    -timeslices Prints the entries in the selected date-range in a form
+    -t          that is easier to process by other tools.
+                Each line contains start and end time, the duration 
+		            (in seconds) and all fields.
+                This is the same format that is also used internally 
+                by $progname for analysis and checking.
+
+    -notpresent Only the time not present is processed.
+                The category 'off' is reserved to mark non-presence.
+                This option only affect timeslices output or
+                any option that processes timeslices (-analyze, -check).
+
+
+USAGE
+    Most of the time you will call $progname in its simples form; 
+    no options, just arguments:
+    \$ $progname category [project [task [...]]]
+
+    This creates a timestamped entry in your 
+    default worklogfile $default_worklogfile
+    Do this whenever you start a new task.
+
+    There is a special category 'off' used to start the not-present time
+    (like lunch, unpaid breaks or when your going home)
+
+    \$ $progname off [project [task [...]]]
+
+    To have a look at the entries of today just type:
+    \$ $progname
+
+    If want to see the entries of another date-range than today use:
+    \$ $progname [-year num] [-month num] [-day num]
+
+    Note: The date-range options have to be in this order (ymd).
+
+    The selected date-range effects not only the entry-output described above, 
+    but all outputs of $progname.
+
+    To simplify processing the entries $progname uses an internal format 
+    called timeslices. You can view the timeslices with:
+    \$ $progname [date_range_options] -timeslices
+
+    The timeslices option shows start- and end-time of every timeslice
+    and the duration in seconds.
+    There are two options available for further processing of the timeslices.
+    Note: $progname implicitely appends an entry with the current time and
+    the category 'now'. This is necessary to get a timeslice for the time
+    between the last entry and now.
+    This behaviour is very useful in most cases but might give strange results
+    in a few special cases.
+
+    To do a simple plausability check over the entries use:
+    \$ $progname [date_range_options] -check
+
+    To print a statistical analysis of the timeslices use:
+    \$ $progname [date_range_options] -statistics
+
+    The statistics option prints different sums over date, categories, 
+    projects, tasks and some useful combinations (categories/projects 
+    and projects/tasks) as well as a grand total.
+    The sums are given in hours and minutes.
+
+    All this timeslice commands process the present-time (when you are working
+    and hopefully paid).
+    To process the not-present-time use:
+    \$ $progname [date_range_options] -notpresent timeslice_option
+    
+    Last but not least you can always edit your worklogfile by hand and do only
+    the analysis with $progname.
+    Manual editing is also useful to correct, insert or move entries, 
+    because $progname does not provide any features to do this.
+    $progname always appends new entries at the end of the worklogfile.
+
+           
+EXIT CODES
+    0   if successfully terminated.
+    1   if -check option found improbable entries
+    2   if corrupt entries prevented successful processing
+    255 if illegal commandline arguments where given.
+
+
+EXAMPLES
+    \$ $progname hello
+        Adds a new entry to the default worklogfile 
+	which is $default_worklogfile
+        The category is 'hello' all other fields are empty.
+        If the file does not yet exist it is created.
+
+    \$ $progname test worklog "testing examples in help"
+        Adds a new entry.
+        The category is 'test', the project is 'worklog', 
+        the description is all other fields.
+
+    \$ $progname off lunch
+        Marks non-presence. The time from now on until the next entry
+        is not processed by the statistical analysis.
+
+    \$ $progname
+        Prints the entries of today.
+
+    \$ $progname -categories
+        Prints a sorted list of all categories used today.
+
+    \$ $progname -projects
+        Prints a sorted list of all projects worked on today.
+
+    \$ $progname -tasks
+        Prints a sorted list of all tasks worked on today.
+
+    \$ $progname -entries
+        Prints a sorted list of all entries worked on today.
+
+    \$ $progname -statistics
+        Prints a statistical analysis of today.
+
+    \$ $progname -statistics -m 02
+        Prints a statistical analysis of february this year.
+
+    \$ $progname -statistics -y 1998
+        Prints a statistical analysis of the year 1998.
+
+    \$ $progname -statistics -y 1998 -m 02 -d 24
+        Prints a statistical analysis of the february 24,1998.
+
+    \$ $progname -statistics -notpresent -m 02 
+        Prints a statistical analysis of the non-present time of february.
+
+    \$ $progname -statistics -all 
+        Prints a statistical analysis of all entries in the worklogfile.
+
+
+KNOWN BUGS
+    - 1998/03/06
+      Error message are printed over stdout instead of stderr.
+
+
+COPYRIGHT
+    (c) 1998 by Eric Obermuhlner
+
+    Special thanks to Thomas Kofler who teached me shell-scripting by 
+    providing very professionally written scripts as examples and answering 
+    hundreds of beginners questions.
+
+_END_USAGE_
+
+	if [ "$1" = "" ]
+	then
+		exit 255
+	else
+		exit "$1"
+	fi
+}
+
+print_message()
+{
+# $1	= message text
+	echo "$progname: $1"
+}
+
+dbg_print()
+{
+# $1	= message text
+	if [ $debugging -gt 0 ]
+	then
+		echo "$progname: DEBUG: $1"
+	fi
+}
+
+dbg_print_var()
+{
+# $1    = varname
+# $2    = contents
+
+	if [ $debugging -gt 0 ]
+	then
+		echo "$progname: DEBUG: var $1=\"$2\""
+	fi
+}
+
+print_error()
+{
+# $1	= message text
+# $2	= error value (optional, default is 2)
+
+	echo "$progname: ERROR: $1" 
+	echo "$progname: use '$progname -help' for more information."
+
+	if [ "$2" = "" ]
+	then
+		exit 2
+	else
+		exit "$2"
+	fi	
+}
+
+print_fatal()
+{
+# $1	= message text
+# $2	= error value (optional, default is 2)
+
+	echo "$progname: FATAL ERROR: $1"
+
+	if [ "$2" = "" ]
+	then
+		exit 2
+	else
+		exit "$2"
+	fi	
+}
+
+check_argument_count()
+{
+# $1	= expected number of arguments
+# $2	= name of command or option
+# -$#	= arguments to count and check
+	n_args=$1
+	shift
+	cmd_name=$1
+	shift
+
+	if [ $# -lt $n_args ]
+	then
+		print_error "$cmd_name expected $n_args argument(s)"
+	fi
+}
+
+ensure_two_digits()
+{
+# $1    = number input
+	case "$1" in
+	    0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 )
+		printf "%02d" "$1"
+		;;
+	    * )
+		printf "%s" "$1"
+		;;
+	esac
+}
+
+print_datestamp()
+{
+	date '+%Y/%m/%d'
+}
+
+print_timestamp()
+{
+	date '+%H:%M:%S'
+}
+
+print_entry()
+{
+	echo "`print_datestamp` `print_timestamp` $@"
+}
+
+print_all_entries()
+{
+# uses global flags to define the range and style [?] of the printed entries
+
+	egrep "^$range_year_all" "$worklogfile"
+	if [ 1 ]
+	then
+		print_entry now
+	fi
+}
+
+print_selected_entries()
+{
+# uses global flags to define the range and style [?] of the printed entries
+
+	if [ $selected_current = true ]
+	then
+		egrep "^$range_year_all" "$worklogfile" | tail -1 
+	else
+		egrep "^$selected_date" "$worklogfile"
+	fi
+
+	if [ $append_now -eq 1 ]
+	then
+		print_entry now
+	fi
+}
+print_notes()
+{
+# note_type
+# note_name
+	$awk '
+	{
+		if(type == "cat") {
+		} else if(type == "prj") {
+		} else if(type == "tsk"
+	}
+	' "type=$note_type" "name=$note_name" "$worklogfile"
+}
+print_worklog_header()
+{
+	echo "#!$progname"
+	echo "#"
+	echo "# $progname (c) 1998 by Eric Obermuhlner"
+	echo "#"
+	echo "# This file \"$worklogfile\" was" 
+	echo "# created by $progname $version_text"
+	echo "# `print_datestamp` `print_timestamp`"
+	echo "# for user $LOGNAME in directory $workloghome"
+	echo "#"
+	echo
+}
+
+create_worklogfile_if_necessary()
+{
+	if [ ! -f "$worklogfile" ]
+	then
+		print_message "creating new $worklogfile"
+		print_worklog_header > "$worklogfile"
+	fi
+}
+
+add_comment()
+{
+# $*	comment text
+	echo "# $*" >>$worklogfile
+}
+add_note()
+{
+# $1    note type
+# $*	comment text
+	echo "$*" >>$worklogfile
+}
+add_entry()
+{
+# $*	entry fields 
+
+	worklogfile_backup="$worklogfile".bak	
+	if [ -f "$worklogfile_backup" ]
+	then
+		rm "$worklogfile_backup"
+	fi
+	cp "$worklogfile" "$worklogfile.bak"
+
+	today=`print_datestamp`
+	entry_count_today=`egrep "^$today" "$worklogfile" | wc -l`
+	if [ "$entry_count_today" -eq 0 ]
+	then
+		echo "" >>$worklogfile
+		echo "### `date` ###" >>$worklogfile
+	fi
+
+	wlentry="$today `print_timestamp` $@"
+	echo "$wlentry" >>"$worklogfile"
+	echo "$wlentry"
+}
+
+print_normalized()
+{
+# stdin	= selected entries
+
+	if [ $normalized_mode = true ]
+	then
+		
+		$awk '
+		{
+			date = $1;
+			time = $2;
+
+			if(date != last_date) {
+				printf date OFS "00:00:00" OFS;
+				printf "off" OFS "normalize";
+				printf ORS;
+			}
+
+			print;
+
+			last_date = $1;
+			last_time = $2;
+		}
+		'
+	else
+		cat
+	fi
+}
+
+
+print_timeslices()
+{
+# stdin	= selected entries
+
+	print_normalized | $awk '
+	BEGIN {
+		months_sec[0] = 0;
+		months_sec[1] = months_sec[0] + (31 * 86400);
+		months_sec[2] = months_sec[1] + (28 * 86400);
+		months_sec[3] = months_sec[2] + (31 * 86400);
+		months_sec[4] = months_sec[3] + (30 * 86400);
+		months_sec[5] = months_sec[4] + (31 * 86400);
+		months_sec[6] = months_sec[5] + (30 * 86400);
+		months_sec[7] = months_sec[6] + (31 * 86400);
+		months_sec[8] = months_sec[7] + (31 * 86400);
+		months_sec[9] = months_sec[8] + (30 * 86400);
+		months_sec[10] = months_sec[9] + (31 * 86400);
+		months_sec[11] = months_sec[10] + (30 * 86400);
+
+	}
+
+	function is_leap_year(year) {
+		if(year % 400 == 0) return 1;
+		if(year % 100 == 0) return 0;
+		if(year % 4 == 0) return 1;
+		return 0
+	}
+
+	function year2sec(year, res, y) {
+		year += 0;
+		
+		if (year in year_sec_cache) {
+			return year_sec_cache[year];
+		}
+
+		res = (year-1970) * 31536000;
+		for(y=1970 ; y<year ; y++) {
+			if(is_leap_year(y)) {
+				res += 86400;
+			}
+		}
+
+		year_sec_cache[year] = res;
+		return res;
+ 	}
+
+	function date2sec(date_str, arr, res) {
+		split(date_str, arr, "/");
+		yy = year2sec(arr[1]);
+		mm = months_sec[arr[2]-1];
+		dd = (arr[3]-1) * 86400;
+		res = yy + mm + dd
+#		printf("DEBUG: yy[%s] = %d\n", arr[1], yy);
+#		printf("DEBUG: mm[%s] = %d\n", arr[2]-1, mm);
+#		printf("DEBUG: dd[%s] = %d\n", arr[3], dd);
+#		printf("DEBUG: res[%s] = %d\n", date_str, res);
+		return res;
+	}
+
+	function time2sec(time_str, arr, res) {
+		split(time_str, arr, ":");
+		res = arr[1] * 3600;
+		res += arr[2] * 60;
+		res += arr[3];
+		return res;
+	}
+
+	{
+		cur_date_sec = date2sec($1)
+		cur_time_sec = time2sec($2)
+
+		if( last_date != "") {
+#			printf("DEBUG: cur_date_sec = %d\n", cur_date_sec);
+#			printf("DEBUG: cur_time_sec = %d\n", cur_time_sec);
+#			printf("DEBUG: last_date_sec = %d\n", last_date_sec);
+#			printf("DEBUG: last_time_sec = %d\n", last_time_sec);
+#			printf("DEBUG: cur = %d\n", cur_date_sec + cur_time_sec);
+#			printf("DEBUG: last = %d\n", last_date_sec + last_time_sec);
+
+			delta = cur_date_sec + cur_time_sec - last_date_sec - last_time_sec
+			printf last_date OFS last_time OFS
+			printf $1 OFS $2 OFS
+			printf "%8d", delta 
+			printf OFS
+			for( i=3; i<=last_fields_count ; i++) {
+				printf last_fields[i] OFS
+			}
+			printf ORS
+		}
+
+		last_fields_count = NF
+		for( i=3; i<=NF ; i++) {
+			last_fields[i] = $i
+		}
+
+		last_date = $1
+		last_time = $2
+		last_date_sec = cur_date_sec
+		last_time_sec = cur_time_sec
+	}
+	'
+}
+
+filter_present_timeslices()
+{
+#stdin	= selected timeslices
+
+	case $present_time_mode in
+	present )
+	    $awk '$6!="off"'
+	    ;;
+	notpresent )
+	    $awk '$6=="off"'
+	    ;;
+	all )
+	    cat
+	    ;;
+	esac
+}
+
+analyze_timeslices()
+{
+# stdin	= selected and filtered timeslices
+
+	$awk '
+	function sec2hms(secs, h, m, s) {
+	    h = int(secs/3600);
+	    m = int((secs - h*3600) / 60);
+	    s = secs - (h*3600 + m*60);
+	    return sprintf("%02d:%02d:%02d", h, m, s);
+	}
+
+	function sec2ms(secs, m, s) {
+	    m = int(secs / 60);
+	    s = secs - (m*60);
+	    return sprintf("%02d:%02d", m, s);
+	}
+
+	function print_total(name, key1, key2, sec_total) {
+		if(hms_mode) {
+			printf( "%-19s %-15s %-15s %10s  %12s\n", 
+				name, key1, key2, sec2hms(sec_total), sec2ms(sec_total));
+		} else {
+			printf( "%-19s %-15s %-15s %10.4f  %12.2f\n", 
+				name, key1, key2, sec_total/3600, sec_total/60);
+		}
+	}
+
+	BEGIN {
+		printf( "%-19s %-15s %-15s %10s  %12s\n", "TYPE", "KEY1", "KEY2", "HOURS", "MIN");
+		printf  "\n";
+
+		date_count = 0;
+	}
+
+	{
+		start_date = $1;
+		sec = $5;
+		cat = $6;
+		prj = $7;
+		tsk = $8;
+
+		if(cat=="") {
+			cat = "_noname_";
+		}
+		if(prj=="") {
+			prj = "_noname_";
+		}
+		if(tsk=="") {
+			tsk = "_noname_";
+		}
+
+		if(!(start_date in date_total)) {
+			date_keys[date_count++] = start_date;
+		}
+
+		date_total[start_date] += sec;
+		cat_total[cat] += sec;
+		prj_total[prj] += sec;
+		tsk_total[tsk] += sec;
+		cat_prj_total[cat,prj] += sec;
+		prj_tsk_total[prj,tsk] += sec
+		total_sec += sec;
+	}
+
+	END {
+		for(i=0 ; i<date_count ; i++) {
+			print_total( date_keys[i], "_all_", "_all_", date_total[date_keys[i]]);
+		}
+		printf "\n";
+
+		for(key1 in cat_total) {
+			print_total( "CATEGORY", key1, "_all_", cat_total[key1]);
+		}
+		printf "\n";
+
+		for(key1 in prj_total) {
+			print_total( "PROJECT", key1, "_all_", prj_total[key1]);
+		}
+		printf "\n";
+
+		for(key1 in tsk_total) {
+			print_total( "TASK", key1, "_all_", tsk_total[key1]);
+		}
+		printf "\n";
+
+		for(key1 in cat_total) {
+			for(key2 in prj_total) {
+				val = cat_prj_total[key1,key2];
+				if(val > 0) {
+					print_total( "CATEGORY/PROJECT", key1, key2, val);
+				}
+			}
+		}
+		printf  "\n"
+
+		for(key1 in prj_total) {
+			for(key2 in tsk_total) {
+				val = prj_tsk_total[key1,key2];
+				if(val > 0) {
+					print_total( "PROJECT/TASK", key1, key2, val);
+				}
+			}
+		}
+		printf  "\n";
+
+		print_total( "TOTAL", "_all_", "_all_", total_sec);
+	}
+	' "hms_mode=$hms_mode"
+}
+
+
+check_entries()
+{
+# stdin  = selected entries
+
+	$awk '
+
+	function demand_exist(str, idx, name, sd, st, cat, prj) {
+		if(str=="") {
+			printf( "'$progname': ERROR: %s (#%d) mandatory: %s %s %s %s\n", name, idx, sd, st, cat, prj)
+		}
+	}
+
+	function should_exist(str, idx, name, sd, st, cat, prj) {
+		if(str=="") {
+			printf( "'$progname': WARNING: %s (#%d) should exist: %s %s %s %s\n", name, idx, sd, st, cat, prj)
+		}
+	}
+
+	{
+		demand_exist($1, 1, "start date", $1, $2, $3, $4)
+		demand_exist($2, 2, "start time", $1, $2, $3, $4)
+		should_exist($3, 3, "category", $1, $2, $3, $4)
+	}
+	' 
+}
+
+check_timeslices()
+{
+# stdin  = selected and filtered timeslices
+
+# gives a warning if duration is strange
+
+	$awk '
+	{
+		start_date = $1
+		start_time = $2
+		sec = $5
+		cat = $6
+		prj = $7
+
+		if(sec>('$unreasonably_long_timeslice'*3600)) {
+			printf( "'$progname': WARNING: timeslice longer that '$unreasonably_long_timeslice' hours: %s %s %s %s\n", 
+					start_date, start_time, cat, prj)
+		} else if(sec==0) {
+			printf( "'$progname': WARNING: zero timeslice: %s %s %s %s\n", 
+					start_date, start_time, cat, prj)
+		} else if(sec<0) {
+			printf( "'$progname': WARNING: negative timeslice: %s %s %s %s\n", 
+					start_date, start_time, cat, prj)
+		}
+	}
+	' 
+}
+
+print_report_range()
+{
+# stdin	= selected and filtered timeslices
+# $1    = name of the month (freeform, e.g. "1998/02")
+# $2    = name of xxx_hours var (e.g. 'month_hours')
+# $3    = name of xxx_days var (e.g. 'month_days')
+
+	exp_hours=`egrep "^$2" "$reportdatafile" | egrep "$1" | cut -f 3` 
+	exp_days=`egrep "^$3" "$reportdatafile" | egrep "$1" | cut -f 3` 
+
+	echo "### Report for $1 ###"
+	echo ""
+
+	$awk '
+	function sec2hms(secs, sign, h, m, s) {
+	    if(secs<0) {
+		sign="-";
+		secs=-secs;
+	    } else {
+		sign=" ";
+	    }
+	    h = int(secs/3600);
+	    m = int((secs - h*3600) / 60);
+	    s = secs - (h*3600 + m*60);
+	    return sprintf("%s%02d:%02d:%02d", sign, h, m, s);
+	}
+
+	function print_hours(name, val) {
+		if(hms_mode) {
+			printf("%-32s : %11s hours\n", name, sec2hms(val));
+		} else {
+			printf("%-32s : %11.2f hours\n", name, val/3600);
+		}
+	}
+	
+	function print_percent(name, val, val100) {
+		if(val100 > 0) {
+			printf("%-32s : %11.2f %\n", name, 100.0*val/val100);
+		}
+	}
+	
+	function print_days(name, val) {
+		printf("%-32s : %11d days\n", name, val);
+	}
+
+	{
+		start_date = $1;
+		sec = $5;
+
+		total_sec += sec;
+
+		if(date_total[start_date] == 0) {
+			# printf("DEBUG: adding %s\n", start_date);
+			workday_count++;
+		}
+		date_total[start_date] += sec;
+	}
+
+	END {
+		if(exp_days == "") {
+			if (exp_hours == "") {
+				exp_days = report_expected_days_per_month;
+			} else {
+				exp_days = exp_hours / report_expected_hours_per_day;
+			}
+		}
+		if(exp_hours == "") {
+			exp_hours = exp_days * report_expected_hours_per_day;
+		}
+
+		exp_total_sec = exp_hours * 3600;
+		over_sec = total_sec - exp_total_sec;
+ 
+		print_hours("Expected work hours", exp_total_sec);
+		print_hours("Total work hours", total_sec);
+		print_percent("Total percent work", total_sec, exp_total_sec);
+		if(over_sec < 0) {
+			print_hours("Necessary hours", -over_sec);
+		} else {
+			print_hours("Overtime", over_sec);
+		}
+		printf("\n");
+
+		minimal_workday_sec=report_minimal_workday_hours * 3600;
+
+		full_total_sec = 0;
+		full_max_sec = 0;
+		full_min_sec = 999999;
+		full_workday_count = 0;
+		partial_max_sec = 0;
+		partial_min_sec = 999999;
+		partial_total_sec = 0;
+		partial_workday_count = 0;
+		for(key in date_total) {
+			sec = date_total[key];
+			if(sec >= minimal_workday_sec) {
+				full_workday_count++;
+				full_total_sec += sec;
+				if(sec > full_max_sec) {
+					full_max_sec = sec;
+				}
+				if(sec < full_min_sec ) {
+					full_min_sec = sec;
+				}
+			} else {
+				partial_workday_count++;
+				partial_total_sec += sec;
+				if(sec > partial_max_sec) {
+					partial_max_sec = sec;
+				}
+				if(sec < partial_min_sec ) {
+					partial_min_sec = sec;
+				}
+			}
+		}
+
+		print_days("Expected working days", exp_days);
+		print_days("Full working days", full_workday_count);
+		if(partial_workday_count > 0) { 
+			print_days("Partial working days", partial_workday_count);
+		}
+		printf("\n");
+
+		if(full_workday_count > 0) {
+			print_hours("Shortest full working day", full_min_sec);
+			print_hours("Longest full working day", full_max_sec);
+			print_hours("Average full working day", (full_total_sec/full_workday_count));
+			print_percent("Average percent work", full_total_sec/full_workday_count, exp_total_sec/exp_days);
+			printf("\n");
+		}
+
+		if(partial_workday_count > 0) { 
+			print_hours("Shortest partial working day", partial_min_sec);
+			print_hours("Longest partial working day", partial_max_sec);
+			print_hours("Average partial working day", (partial_total_sec/partial_workday_count));
+			printf("\n");
+		}
+	
+		if(exp_days>full_workday_count && over_sec<0) {
+			print_days("Necessary working days", exp_days-full_workday_count);
+			print_hours("Necessary average day", (-over_sec/(exp_days-full_workday_count)));
+			printf("\n");
+		}
+	}
+
+	' "exp_hours=$exp_hours" "exp_days=$exp_days" "hms_mode=$hms_mode" "report_expected_days_per_month=$report_expected_days_per_month" "report_expected_hours_per_day=$report_expected_hours_per_day" "report_minimal_workday_hours=$report_minimal_workday_hours"
+}
+
+print_report()
+{
+	if echo "$report_date" | grep "\<$range_year_all/$range_month_all\>" >$NULL
+	then
+		print_report_range "$report_date" 'month_hours' 'month_days'
+	elif echo "$report_date" | grep "\<$range_year_all\>" >$NULL
+	then
+		print_report_range "$report_date" 'year_hours' 'year_days'
+	else
+		print_error "Unknown report-date format \"$report_date\"."
+	fi
+}
+
+print_graphic()
+{
+	$awk '
+	function time2sec(time_str, arr, res) {
+		split(time_str, arr, ":");
+		res = arr[1] * 3600;
+		res += arr[2] * 60;
+		res += arr[3];
+		return res;
+	}
+
+	{
+		start_date = $1;
+		start_time = $2;
+		end_date = $3;
+		end_time = $4;
+		sec = $5;
+		cat = $6;
+		prj = $7;
+		tsk = $8;
+
+		if(start_date != last_start_date) {
+		    printf("\n");
+		    printf(" %s", start_date);
+		    printf("\n");
+		}
+
+		printf("%s - %s ", substr(start_time,1,5), substr(end_time,1,5));
+
+		earliest_unit = time2sec(earliest_time) / 60 / unit_minutes;
+		latest_unit = time2sec(latest_time) / 60 / unit_minutes - earliest_unit;
+		start_unit = time2sec(start_time) / 60 / unit_minutes - earliest_unit;
+		end_unit = time2sec(end_time) / 60 / unit_minutes - earliest_unit;
+		#printf("START_UNIT=" start_unit);
+		#printf(" END_UNIT=" end_unit);
+		i = 0;
+		while(i<=start_unit) {
+			if(i % scale_units) {
+		    		printf("-");
+			} else {
+		    		printf("|");
+			}
+		    	i++;
+		}
+		printf("#");
+		i++;
+		while(i<=end_unit) {
+			printf("#");
+			i++
+		}
+		while(i<=latest_unit) {
+			if(i % scale_units) {
+		    		printf("-");
+			} else {
+		    		printf("|");
+			}
+		    	i++
+		}
+		printf(" %s %s %s\n", cat, prj, tsk);
+
+		last_start_date = start_date;
+	}
+	' "earliest_time=$earliest_time" "latest_time=$latest_time" "unit_minutes=$unit_minutes" "scale_units=$scale_units"
+	
+}
+
+set_defaults()
+{
+# $1    = defaultfile (e.g. "$workloghome/.worklogrc")
+
+	defaults='
+# default locations for work files
+default_worklogfile="$workloghome/.worklog"
+default_reportdatafile="$workloghome/.worklog_reportdata"
+
+# for -report
+report_minimal_workday_hours=3
+report_expected_days_per_month=20
+report_expected_hours_per_day=8
+
+# for -graphic
+default_earliest_time="08:00:00"
+default_latest_time="20:00:00"
+default_unit_minutes=15
+default_scale_units=8
+
+# for -hms option
+default_hms_mode=0
+
+# for -check option (in hours)
+unreasonably_long_timeslice=6
+'
+	
+	eval "$defaults"
+	if [ -f "$1" ] 
+	then
+		. "$1"
+	else
+		echo "# " > "$1"	
+		echo "# $1 created `date '+%Y/%m/%d %H:%M:%S'`" >> "$1"
+		echo "# " >> "$1"
+		echo "$defaults" >> "$1"
+	fi
+
+	worklogfile="$default_worklogfile"
+	reportdatafile="$default_reportdatafile"
+
+	earliest_time="$default_earliest_time"
+	latest_time="$default_latest_time"
+	unit_minutes="$default_unit_minutes"
+	scale_units="$default_scale_units"
+
+	hms_mode="$default_hms_mode"
+}
+
+
+
+##############################################################################
+
+## initialize default options
+verbose_mode=0
+resume_mode=0
+main_mode='default'
+present_time_mode='present'
+normalized_mode='false'
+
+field_to_print=3
+
+# for selection of entry-range
+range_year_all='[123][0-9][0-9][0-9]'
+range_month_all='[0-1][0-9]'
+range_day_all='[0-3][0-9]'
+selected_year="`date +%Y`"
+selected_month="`date +%m`"
+selected_day="`date +%d`"
+selected_current=false
+text_year="$selected_year"
+text_month="$selected_month"
+text_day="$selected_day"
+
+append_now=1
+
+if [ "$1" = '-workloghome' ]
+then
+	check_argument_count 1 $*
+	shift
+	workloghome="$1"
+	shift
+fi
+
+if [ "$workloghome" = "" ]
+then
+	workloghome="$WORKLOGHOME"
+fi
+if [ "$workloghome" = "" ]
+then
+	workloghome="$HOME"
+fi
+
+set_defaults "$workloghome/.worklogrc"
+## parse options
+parsing_opts=1
+dbg_print "beginning parsing options: \"$*\""
+while [ $parsing_opts -eq 1 ]
+do
+	case "$1" in
+	-h | -\? | -help)
+		print_usage 0
+		;;
+	-v | -verbose )
+		verbose_mode=1
+		dbg_print_var 'verbose_mode' "$verbose_mode"
+		;;
+	-r | -resume )
+		main_mode='resume'
+		dbg_print_var 'main_mode' "$main_mode"
+		;;
+	-report )
+		main_mode='report'
+		dbg_print_var 'main_mode' "$main_mode"
+		;;
+	-g | -graphic )
+		main_mode='graphic'
+		dbg_print_var 'main_mode' "$main_mode"
+		;;
+	-version )
+		print_message "$version_text"
+		exit
+		;;
+	-debug )   
+		debugging=1
+		dbg_print_var 'debugging' "$debugging"
+		;;
+	-entries )
+		main_mode='print_entries'
+		dbg_print_var 'main_mode' "$main_mode"
+		;;
+	-categories )
+		if [ "$main_mode" = 'print_field' ]
+		then
+			print_error "$1 is incompatible with other field printing options"
+		fi
+		main_mode='print_field'
+		field_to_print=3
+		dbg_print_var 'main_mode' "$main_mode"
+		dbg_print_var 'field_to_print' "$field_to_print"
+		;;
+	-projects )
+		if [ "$main_mode" = 'print_field' ]
+		then
+			print_error "$1 is incompatible with other field printing options"
+		fi
+		main_mode='print_field'
+		field_to_print=4
+		dbg_print_var 'main_mode' "$main_mode"
+		dbg_print_var 'field_to_print' "$field_to_print"
+		;;
+	-tasks )
+		if [ "$main_mode" = 'print_field' ]
+		then
+			print_error "$1 is incompatible with other field printing options"
+		fi
+		main_mode='print_field'
+		field_to_print=5
+		dbg_print_var 'main_mode' "$main_mode"
+		dbg_print_var 'field_to_print' "$field_to_print"
+		;;
+	-comment )
+		main_mode='comment'
+		;;
+	-note )
+		main_mode='note'
+		check_argument_count 1 $*
+		shift
+		note_type="$1"
+		;;
+	-printnote )
+		main_mode='note_print'
+		check_argument_count 2 $*
+		shift
+		note_type="$1"
+		shift
+		note_name="$1"
+		;;
+	-a | -all)
+		selected_year="$range_year_all"
+		selected_month="$range_month_all"
+		selected_day="$range_day_all"
+		dbg_print_var 'selected_year' "$selected_year"
+		dbg_print_var 'selected_month' "$selected_month"
+		dbg_print_var 'selected_day' "$selected_day"
+		;;
+	-y | -year)
+		check_argument_count 1 $*
+		shift
+		selected_year="$1"
+		selected_month="$range_month_all"
+		selected_day="$range_day_all"
+		text_year="$1"
+		text_month=""
+		text_day=""
+		dbg_print_var 'selected_year' "$selected_year"
+		dbg_print_var 'selected_month' "$selected_month"
+		dbg_print_var 'selected_day' "$selected_day"
+		;;
+	-quarter )
+		check_argument_count 1 $*
+		shift
+		case "$1" in
+		1)
+			selected_month="(01|02|03)"
+			text_month="Q1"
+			;;
+		2)
+			selected_month="(04|05|06)"
+			text_month="Q2"
+			;;
+		3)
+			selected_month="(07|08|09)"
+			text_month="Q3"
+			;;
+		*)
+			selected_month="(10|11|12)"
+			text_month="Q4"
+			;;
+		esac
+		selected_day="$range_day_all"
+		text_day=""
+		;;
+	-m | -month )
+		check_argument_count 1 $*
+		shift
+		selected_month="`ensure_two_digits $1`"
+		selected_day="$range_day_all"
+		text_month="$selected_month"
+		text_day=""
+		dbg_print_var 'selected_month' "$selected_month"
+		dbg_print_var 'selected_day' "$selected_day"
+		;;
+	-d | -day)
+		check_argument_count 1 $*
+		shift
+		selected_day="`ensure_two_digits $1`"
+		text_day="$selected_day"
+		append_now=0
+		dbg_print "set selected_day=$selected_day"
+		dbg_print "set append_now=$append_now"
+		;;
+	-current )
+		selected_current=true
+		;;
+	-t | -timeslices )
+		main_mode='print_timeslices'
+		dbg_print_var 'main_mode' "$main_mode"
+		;;
+	-s | -statistic | -statistics | -analyze )
+		main_mode='statistics'
+		dbg_print_var 'main_mode' "$main_mode"
+		;;
+	-c | -check )
+		main_mode='check'
+		dbg_print_var 'main_mode' "$main_mode"
+		;;
+	-hms )
+		hms_mode="1"
+		;;
+	-off | -notpresent )
+		present_time_mode='notpresent'
+		dbg_print_var 'present_time_mode' "$present_time_mode"
+		;;
+	-allpresent )
+		present_time_mode='all'
+		dbg_print_var 'present_time_mode' "$present_time_mode"
+		;;
+	-normalize )
+		normalized_mode='true'
+		;;
+	-f | -file )
+		check_argument_count 1 $*
+		shift
+		worklogfile=$1
+		dbg_print_var 'worklogfile' "$worklogfile"
+		;;
+	-* )
+		print_error "unknown option $1"
+		;;
+	* )
+		parsing_opts=0
+		;;
+	esac
+
+	if [ $parsing_opts -eq 1 ]
+	then
+		dbg_print "shifting options with $# args left: \"$*\""
+		shift
+	fi
+done
+
+dbg_print "starting main action"
+
+## create worklogfile
+create_worklogfile_if_necessary
+
+selected_date="$selected_year/$selected_month/$selected_day"
+dbg_print 'selected_date' "$selected_date"
+
+
+case "$main_mode" in
+'print_field' )
+	print_selected_entries | cut -d " " -f $field_to_print | sort -u
+	;;
+
+'print_entries' )
+	print_selected_entries | $awk '{ printf("%s %s %s\n",$3,$4,$5); }' | sort -u
+	;;
+
+'print_timeslices' )
+  if [ $selected_current = true ]
+	then
+  	print_all_entries | print_timeslices | tail -1
+	else
+   	print_selected_entries | print_timeslices | filter_present_timeslices
+	fi
+	;;
+	
+'statistics' )
+	print_selected_entries | print_timeslices | filter_present_timeslices | analyze_timeslices
+	;;
+
+'check' )
+	print_selected_entries | check_entries
+	print_selected_entries | print_timeslices | filter_present_timeslices | check_timeslices
+	;;
+
+'report' )
+	selected_day="$range_day_all"
+	text_day=""
+	selected_date="$selected_year/$selected_month/$selected_day"
+	dbg_print 'selected_date' "$selected_date"
+
+	report_date="$text_year"
+	if [ -n "$text_month" ]
+	then
+		report_date="$report_date/$text_month"
+	fi
+	dbg_print_var 'report_date' "$report_date"
+	print_selected_entries | egrep "^$report_date" | print_timeslices | filter_present_timeslices | print_report
+	;;
+
+'graphic' )
+	print_selected_entries | print_timeslices | filter_present_timeslices | print_graphic
+	;;
+
+'resume' )
+	# resume ALWAYS uses the full date-range
+	selected_year="$range_year_all"
+	selected_month="$range_month_all"
+	selected_day="$range_day_all"
+	dbg_print_var 'selected_year' "$selected_year"
+	dbg_print_var 'selected_month' "$selected_month"
+	dbg_print_var 'selected_day' "$selected_day"
+
+	selected_date="$selected_year/$selected_month/$selected_day"
+	dbg_print 'selected_date' "$selected_date"
+
+	if [ $# -eq 0 ]
+	then
+		# resume second to last action
+		print_message "resumed second to last entry"
+		add_entry `print_selected_entries | tail -3 | head -1 | cut -f 3- -d ' '`
+		# note: needs 'tail -3' because print_selected_entries adds the "now" entry
+	else
+		# resume last matching action
+		print_error "-resume with args not yet implemented..."
+	fi
+	;;
+
+'comment' )
+	if [ $# -eq 0 ]
+	then
+		read tmpstr
+		while [ "$tmpstr" != "." ]
+		do
+			add_comment "$tmpstr"
+			read tmpstr
+		done
+	else
+		add_comment $*
+	fi
+	;;
+'note' )
+	if [ $# -eq 0 ]
+	then
+		read tmpstr
+		while [ "$tmpstr" != "." ]
+		do
+			add_note "$note_type" "$tmpstr"
+			read tmpstr
+		done
+	else
+		add_note "$note_type" $*
+	fi
+	;;
+
+'printnote' )
+	print_notes
+	;;
+'normal' | 'default' )
+	if [ $# -eq 0 ]
+	then
+		# print entries of desired range
+		print_selected_entries
+	else
+		# add entry
+		print_message "added entry"
+		add_entry $@
+	fi
+	;;
+
+* )
+	print_fatal "unknown mode: $main_mode"
+	;;
+esac
+
+dbg_print "finished main action"
+
+
+
